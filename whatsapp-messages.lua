@@ -3,8 +3,8 @@ local manifest = {
   name = 'WhatsApp messages',
   version = '3.0',
   author = 'Aaron Hewitt',
-  minApiVersion = 4,
-  testedApiVersion = 5,
+  minApiVersion = 1,
+  testedApiVersion = 1,
   description = 'Reads each message in a WhatsApp chat as one item: sender, content, the message it replies to, and time. Play, playback speed and the other buttons in a message are in its Actions menu.',
   apps = {
     { package = 'com.whatsapp', activity = 'Conversation' },
