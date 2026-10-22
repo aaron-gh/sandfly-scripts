@@ -1,7 +1,7 @@
 local manifest = {
   id = 'whatsapp-messages',
   name = 'WhatsApp messages',
-  version = '3.2',
+  version = '3.3',
   author = 'Aaron Hewitt',
   minApiVersion = 1,
   testedApiVersion = 1,
@@ -324,12 +324,14 @@ local function photo_of(r)
   return label
 end
 
+-- The quote's frame and holder have no text of their own, so Android leaves them out of what a
+-- screen reader sees; only the quote's title and text are there.
 local function reply_of(r)
-  if not first(r, 'quoted_message_holder') then
-    return ''
-  end
   local author = text_in(r, 'quoted_title')
   local quoted = text_in(r, 'quoted_text')
+  if author == '' and quoted == '' then
+    return ''
+  end
   return join({ (tr('in reply to') .. ' ' .. author):match('^%s*(.-)%s*$'), quoted }, ': ')
 end
 
@@ -352,12 +354,13 @@ end
 
 -- The time and status are said on their own, so a message of a kind not handled above is read
 -- from the rest of the text in its bubble.
-local SKIP_IDS = { date = true, status = true, name_in_group_tv = true, conversation_row_date_divider = true }
+local SKIP_IDS = {
+  date = true, status = true, name_in_group_tv = true, secondary_name_in_group_tv = true,
+  conversation_row_date_divider = true, group_profile_initials = true,
+}
 local function bubble_text_of(r)
-  local main = main_of(r)
-  if not main then
-    return ''
-  end
+  -- A text message's bubble has nothing to say of its own, so screen readers don't see it.
+  local main = main_of(r) or r.node
   local texts, seen = {}, {}
   for _, item in ipairs(main:findAll({}, MAX_BUBBLE_ITEMS)) do
     if #texts >= MAX_BUBBLE_TEXTS then
