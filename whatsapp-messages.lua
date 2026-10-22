@@ -1,7 +1,7 @@
 local manifest = {
   id = 'whatsapp-messages',
   name = 'WhatsApp messages',
-  version = '3.1',
+  version = '3.2',
   author = 'Aaron Hewitt',
   minApiVersion = 1,
   testedApiVersion = 1,
@@ -32,7 +32,8 @@ local tr = sf._
 
 -- A message row is read with one search, which gives the row and everything in it, so that the
 -- rest of the script looks things up in the script instead of asking WhatsApp again. Every call
--- to the app takes time, and SandFly waits only 250 milliseconds for onFocus.
+-- to the app takes time, more than the 30 milliseconds SandFly waits for onFocus, so the row is
+-- read in a task and said when it is ready.
 local MAX_ROW_ITEMS = 200
 local MAX_BUTTONS = 24
 local MAX_OPTIONS = 20
@@ -64,10 +65,14 @@ local function short_id(item)
   return (item.id or ''):match('[^/]*$')
 end
 
--- Removes the direction marks WhatsApp adds, U+200B to U+200F and U+202A to U+202E, and the "~"
--- before a name the contact list doesn't have.
+-- Removes the direction marks WhatsApp adds, U+200B to U+200F, U+202A to U+202E and U+2066 to
+-- U+2069, and the "~" before a name the contact list doesn't have.
 local function clean(text)
   text = (text or ''):gsub('\226\128[\139-\143\170-\174]', '')
+  text = text:gsub('\226\129[\166-\169]', '')
+  -- The narrow no-break space after the "~", U+202F.
+  text = text:gsub('\226\128\175', ' ')
+  text = text:match('^%s*(.-)%s*$')
   text = text:gsub('^~%s*', '')
   return (text:match('^%s*(.-)%s*$'))
 end
@@ -432,8 +437,11 @@ end
 local EXPAND_ATTEMPTS = 4
 local EXPAND_DELAY = 250
 
+-- Each focus is counted, so that a row read after focus moved on isn't said.
+local focus_count = 0
+
 -- WhatsApp cuts a long message off in the screen's text, so open it and say the whole message.
-local function expand(row, list, read_more)
+local function expand(row, list, read_more, count)
   read_more:click()
   local current = row
   for _ = 1, EXPAND_ATTEMPTS do
@@ -444,7 +452,7 @@ local function expand(row, list, read_more)
     end
   end
   local text = describe(read_row(current, list))
-  if text then
+  if text and count == focus_count then
     sf.speak(text, { interrupt = true })
   end
 end
@@ -460,17 +468,29 @@ sf.onWindowChange(function()
   chats = {}
 end)
 
-sf.onFocus(function(item)
+-- Reads the focused row and says it, or what SandFly would have said, [fallback], if it isn't a
+-- message.
+local function say_row(item, fallback, count)
   local list = list_of(item)
-  if not list then
+  local r = list and read_row(item, list)
+  local read_more = r and expand_long and read_more_in(r)
+  if read_more then
+    expand(item, list, read_more, count)
     return
   end
-  local r = read_row(item, list)
-  local read_more = expand_long and read_more_in(r)
-  if not read_more then
-    return describe(r)
+  local text = r and describe(r) or fallback
+  if count == focus_count and present(text) then
+    sf.speak(text, { interrupt = true })
   end
-  sf.run(expand, item, list, read_more)
+end
+
+sf.onFocus(function(item, text)
+  focus_count = focus_count + 1
+  -- Only the id is looked at here, which needs no call to WhatsApp.
+  if short_id(item):sub(1, 17) ~= 'conversation_row_' then
+    return
+  end
+  sf.run(say_row, item, text, focus_count)
   return false
 end)
 
