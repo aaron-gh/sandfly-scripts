@@ -1,7 +1,7 @@
 local manifest = {
   id = 'whatsapp-messages',
   name = 'WhatsApp messages',
-  version = '3.3',
+  version = '3.4',
   author = 'Aaron Hewitt',
   minApiVersion = 1,
   testedApiVersion = 1,
@@ -33,7 +33,7 @@ local tr = sf._
 -- A message row is read with one search, which gives the row and everything in it, so that the
 -- rest of the script looks things up in the script instead of asking WhatsApp again. Every call
 -- to the app takes time, more than the 30 milliseconds SandFly waits for onFocus, so the row is
--- read in a task and said when it is ready.
+-- read after onFocus returns and said when it is ready.
 local MAX_ROW_ITEMS = 200
 local MAX_BUTTONS = 24
 local MAX_OPTIONS = 20
@@ -493,7 +493,9 @@ sf.onFocus(function(item, text)
   if short_id(item):sub(1, 17) ~= 'conversation_row_' then
     return
   end
-  sf.run(say_row, item, text, focus_count)
+  -- sf.run would start reading at once, inside onFocus's time, and SandFly turns the script off
+  -- when it runs out of time again and again. A timer reads the row once onFocus has returned.
+  sf.setTimeout(say_row, 0, item, text, focus_count)
   return false
 end)
 
