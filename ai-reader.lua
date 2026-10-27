@@ -12,7 +12,7 @@
 local manifest = {
   id = 'ai-reader',
   name = 'AI reader',
-  version = '1.11',
+  version = '1.12',
   author = 'Devin Prater',
   minApiVersion = 1,
   testedApiVersion = 1,
@@ -70,6 +70,9 @@ local BASELINE_MS = 1500 -- How long the reply on screen counts as already read.
 
 local pendingText = '' -- The newest reply we have seen on screen.
 local spokenText = '' -- The last reply we read out.
+local generation = 0 -- Counts each time an app starts writing a new reply.
+local pendingGeneration = 0 -- The generation that `pendingText` came from.
+local spokenGeneration = 0 -- The generation that `spokenText` came from.
 local generating = false
 local baselined = false -- Whether we have noted the reply already on screen.
 local baselineDue = false -- Set when the baseline wait is over.
@@ -157,6 +160,37 @@ local function leafTexts(item, out)
   end
   for _, kid in ipairs(kids) do
     leafTexts(kid, parts)
+  end
+  return parts
+end
+
+-- The same node, reached twice in one walk, is the same text in the same
+-- place. Two different nodes can share text, such as two closing `end` lines
+-- in one code block, so identity has to include the bounds.
+local function nodeKey(item)
+  local b = item ~= nil and item.bounds or nil
+  if b == nil then
+    return nil
+  end
+  return tostring(b.left) .. ',' .. tostring(b.top) .. ',' ..
+    tostring(b.right) .. ',' .. tostring(b.bottom) .. '|' .. clean(item.text)
+end
+
+-- The items with no children and some text, in reading order.
+local function leafItems(item, out)
+  local parts = out or {}
+  if item == nil then
+    return parts
+  end
+  local kids = kidsOf(item)
+  if #kids == 0 then
+    if clean(item.text) ~= '' then
+      parts[#parts + 1] = item
+    end
+    return parts
+  end
+  for _, kid in ipairs(kids) do
+    leafItems(kid, parts)
   end
   return parts
 end
@@ -302,10 +336,16 @@ local function chatGptCode(item)
     return nil
   end
   local code = {}
+  local seen = {}
   for _, kid in ipairs(kidsOf(container)) do
     if kid and not sameItem(kid, header) then
-      for _, text in ipairs(leafTexts(kid, {})) do
-        if not contains(code, text) then
+      for _, leaf in ipairs(leafItems(kid, {})) do
+        local text = clean(leaf.text)
+        local key = nodeKey(leaf)
+        if text ~= '' and (key == nil or not seen[key]) then
+          if key then
+            seen[key] = true
+          end
           code[#code + 1] = text
         end
       end
@@ -329,7 +369,8 @@ local function isSuggestion(textItem, boundary)
   return false
 end
 
-local function appendChatGpt(item, boundary, parts)
+local function appendChatGpt(item, boundary, parts, seen)
+  seen = seen or {}
   local code = chatGptCode(item)
   if code ~= nil then
     parts[#parts + 1] = codeBlock(code)
@@ -341,13 +382,17 @@ local function appendChatGpt(item, boundary, parts)
       return
     end
     local text = clean(item.text)
-    if text ~= '' and not contains(parts, text) then
+    local key = nodeKey(item)
+    if text ~= '' and (key == nil or not seen[key]) then
+      if key then
+        seen[key] = true
+      end
       parts[#parts + 1] = text
     end
     return
   end
   for _, kid in ipairs(kids) do
-    appendChatGpt(kid, boundary, parts)
+    appendChatGpt(kid, boundary, parts, seen)
   end
 end
 
@@ -404,7 +449,13 @@ local function collectFlat(node, width, container, out)
   if #kids == 0 then
     local text = clean(node.text)
     if text ~= '' and b then
-      out[#out + 1] = { text = text, top = b.top, container = current, editable = node.editable }
+      out[#out + 1] = {
+        text = text,
+        top = b.top,
+        container = current,
+        editable = node.editable,
+        key = nodeKey(node),
+      }
     end
     return
   end
@@ -432,14 +483,19 @@ local function flatChatGptResponse(root)
     return nil
   end
   local parts = {}
+  local seen = {}
   for _, node in ipairs(nodes) do
     local text = node.text
+    local key = node.key
     if node.top > lastUser.bottom
       and not node.editable
       and text ~= 'Ask ChatGPT'
       and text ~= 'Reply to ChatGPT'
       and text ~= 'Message ChatGPT'
-      and not contains(parts, text) then
+      and (key == nil or not seen[key]) then
+      if key then
+        seen[key] = true
+      end
       parts[#parts + 1] = text
     end
   end
@@ -510,13 +566,20 @@ local function isClaudeCode(item)
   return true
 end
 
-local function appendClaude(item, parts)
+local function appendClaude(item, parts, seen)
+  seen = seen or {}
   if isClaudeCode(item) then
     local code = {}
+    local codeSeen = {}
     for _, kid in ipairs(kidsOf(item)) do
       if not hasDesc(kid, 'Copy code') then
-        for _, text in ipairs(leafTexts(kid, {})) do
-          if not contains(code, text) then
+        for _, leaf in ipairs(leafItems(kid, {})) do
+          local text = clean(leaf.text)
+          local key = nodeKey(leaf)
+          if text ~= '' and (key == nil or not codeSeen[key]) then
+            if key then
+              codeSeen[key] = true
+            end
             code[#code + 1] = text
           end
         end
@@ -530,13 +593,17 @@ local function appendClaude(item, parts)
   local kids = kidsOf(item)
   if #kids == 0 then
     local text = clean(item.text)
-    if text ~= '' and not contains(parts, text) then
+    local key = nodeKey(item)
+    if text ~= '' and (key == nil or not seen[key]) then
+      if key then
+        seen[key] = true
+      end
       parts[#parts + 1] = text
     end
     return
   end
   for _, kid in ipairs(kids) do
-    appendClaude(kid, parts)
+    appendClaude(kid, parts, seen)
   end
 end
 
@@ -659,17 +726,35 @@ finish = function()
     end
     return
   end
+  -- Take the reply as it is now. The text cached by the poll that scheduled
+  -- this may be a fragment from before the app finished writing.
+  local text = latestResponse(root, packageName)
+  if text == '' then
+    pendingText = ''
+    print('The reply disappeared before it could be read')
+    return
+  end
+  if text ~= pendingText then
+    pendingText = text
+    pendingGeneration = generation
+    quiet = sf.setTimeout(finish, quietSeconds() * 1000)
+    print('The reply changed while waiting; waiting for quiet again')
+    return
+  end
   retries = 0
   if pendingText == '' then
     print('Nothing to read')
     return
   end
-  if pendingText == spokenText then
+  -- Identical answers to two different questions are two replies. Compare the
+  -- generation as well as the text, so the second one is still read.
+  if pendingText == spokenText and pendingGeneration <= spokenGeneration then
     print('That reply was already read')
     return
   end
   print('Reading a reply of ' .. #pendingText .. ' characters:\n' .. pendingText)
   spokenText = pendingText
+  spokenGeneration = pendingGeneration
   say(pendingText, setting('interrupt', false) == true)
 end
 
@@ -698,6 +783,12 @@ check = function()
 
   local writing = isGenerating(root, packageName)
   if writing and not generating then
+    generation = generation + 1
+    if pendingText == spokenText then
+      -- An answer that comes out identical to the last one is still a new
+      -- reply, so mark the text as owing a reading for this generation.
+      pendingGeneration = generation
+    end
     speakGenerating()
   end
   if writing then
@@ -716,6 +807,8 @@ check = function()
     if text ~= '' then
       pendingText = text
       spokenText = text
+      pendingGeneration = generation
+      spokenGeneration = generation
     end
     if not baselineDue then
       return -- The screen is still settling.
@@ -730,9 +823,19 @@ check = function()
   end
 
   if text == pendingText then
+    -- The text has stopped changing. finish() can have run out of retries
+    -- while the app was still writing and left no timer behind, and no
+    -- further text change will come to arm one, so arm it here.
+    local owed = pendingText ~= spokenText or pendingGeneration > spokenGeneration
+    if owed and not writing and quiet == nil then
+      polls = 0
+      quiet = sf.setTimeout(finish, quietSeconds() * 1000)
+      print('A reply is waiting to be read and had no timer')
+    end
     return
   end
   pendingText = text
+  pendingGeneration = generation
   polls = 0
   if quiet then
     sf.clearTimer(quiet)
@@ -751,6 +854,8 @@ end
 reset = function()
   pendingText = ''
   spokenText = ''
+  pendingGeneration = generation
+  spokenGeneration = generation
   generating = false
   baselined = false
   baselineDue = false
