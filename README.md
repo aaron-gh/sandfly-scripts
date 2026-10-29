@@ -10,4 +10,6 @@ Lua scripts for the [SandFly](https://github.com/aaron-gh/SandFly) screen reader
 | `whatsapp-messages.lua` | WhatsApp | Each message in a chat is one item: sender, content, the message it replies to, and time. Its buttons are in its Actions menu. | Aaron Hewitt |
 | `youtube-actions.lua` | YouTube | Swiping skips the buttons in each video, mix, playlist and comment. They are in its Actions menu. | Surendra |
 
+Each script ends with SandFly's signature, which SandFly checks before installing it: the install dialog says **Signed by SandFly.** for these scripts, wherever the file came from, and says so if a file was changed after signing. A changed script is signed again with `tools/sign_script.py` from the SandFly repository, which needs SandFly's signing key. SandFly updates these scripts without asking only when the new version is signed.
+
 The scripts are under the Apache License 2.0. See [LICENSE](LICENSE).

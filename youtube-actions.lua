@@ -171,3 +171,4 @@ sf.onActions(function(item)
   if isComment(item) then return commentActions(item) end
   return nil
 end)
+-- SandFly signature: MEUCIQDakzVaA+AOdDrO77a3BSTHqiuvOqSCOWtHCK1S3VSk0QIgVIUKaoVhx04vYH0agI39MFCUll0LmJU7fJbgJQVHsC4=

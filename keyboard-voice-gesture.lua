@@ -135,3 +135,4 @@ sf.onCommand('voice', function(event)
 end)
 
 print('voice script ready')
+-- SandFly signature: MEQCIHdRxWv2Lise9Ccg4j8cAQUy5+f0x913sIFRguBk1WXjAiBns5aLRYM/qVLuKzd2DM2h461KQGDRknlNaU8dRtSGlA==

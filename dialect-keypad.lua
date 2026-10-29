@@ -90,3 +90,4 @@ sf.onSettingChange(function(key)
     apply_hold_time()
   end
 end)
+-- SandFly signature: MEYCIQCuUtLQuGXL+LPw3jdFoiE7rOnarSFE4BOqRTkAef2EVgIhAPRNd3jtAY46sk5XQum9TLy1XBI6P6UAmP+vSyFGFdpm
