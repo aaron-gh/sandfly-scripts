@@ -4,15 +4,15 @@
 -- Lua scripting API. It is a port of Waypoint, an accessibility service.
 --
 -- The per-app rules below are Waypoint's measured rules, kept as they were:
--- Gemini's view ids, ChatGPT's "Read aloud" row, and Claude's "Copy message"
--- row. Each is an implementation detail of that app and may break in a future
+-- Gemini's view ids and Claude's "Copy message" row. Each is an
+-- implementation detail of that app and may break in a future
 -- release. The Log on this script's page says what it pulled out of the
 -- screen, so a break can be told apart from a quiet conversation.
 
 local manifest = {
   id = 'ai-reader',
   name = 'AI reader',
-  version = '1.12',
+  version = '1.13',
   author = 'Devin Prater',
   minApiVersion = 1,
   testedApiVersion = 1,
@@ -52,10 +52,11 @@ local manifest = {
 }
 
 local GEMINI = 'com.google.android.googlequicksearchbox'
-local CHATGPT = 'com.openai.chatgpt'
 local CLAUDE = 'com.anthropic.claude'
-local APPS = { [GEMINI] = true, [CHATGPT] = true, [CLAUDE] = true }
-local NAMES = { [GEMINI] = 'Gemini', [CHATGPT] = 'ChatGPT', [CLAUDE] = 'Claude' }
+local APPS = { [GEMINI] = true, [CLAUDE] = true }
+local NAMES = { [GEMINI] = 'Gemini', [CLAUDE] = 'Claude' }
+
+local tr = sf._
 
 local CODE_START = 'Code block:'
 local CODE_END = 'Code block end.'
@@ -126,24 +127,6 @@ local function endsWith(text, suffix)
   return text:sub(-#suffix) == suffix
 end
 
--- Whether two snapshots are the same item, by identity or by id and bounds.
-local function sameItem(a, b)
-  if a == b then
-    return true
-  end
-  if a == nil or b == nil then
-    return false
-  end
-  if idOf(a) ~= idOf(b) or idOf(a) == '' then
-    return false
-  end
-  local ba, bb = a.bounds, b.bounds
-  if ba == nil or bb == nil then
-    return false
-  end
-  return ba.left == bb.left and ba.top == bb.top and ba.right == bb.right and ba.bottom == bb.bottom
-end
-
 -- The text of every item with no children, in reading order.
 local function leafTexts(item, out)
   local parts = out or {}
@@ -195,20 +178,6 @@ local function leafItems(item, out)
   return parts
 end
 
-local function contains(list, wanted)
-  for _, value in ipairs(list) do
-    if value == wanted then
-      return true
-    end
-  end
-  return false
-end
-
--- Whether any item at or inside this one has exactly this text.
-local function hasText(item, wanted)
-  return contains(leafTexts(item, {}), wanted)
-end
-
 -- Whether this item or anything inside it is described as `wanted`.
 local function hasDesc(item, wanted)
   if item == nil then
@@ -243,6 +212,19 @@ local function find(query, limit)
   return items or {}
 end
 
+-- Whether a search finds anything on the screen right now. The search runs
+-- inside SandFly and stops at the first match.
+local function found(query)
+  local ok, item = pcall(function()
+    return sf.screen.find(query)
+  end)
+  if not ok then
+    noteError(item)
+    return false
+  end
+  return item ~= nil
+end
+
 local function newest(items)
   if #items == 0 then
     return nil
@@ -261,20 +243,21 @@ local function currentPackage()
 end
 
 -- ---------------------------------------------------------------------------
--- Is a reply being written right now? These are Waypoint's signals.
+-- Is a reply being written right now? These are Waypoint's signals, looked
+-- for with SandFly's own search rather than a walk of the whole screen in
+-- Lua: a walk costs a call into the app for every item against the script's
+-- time budget, and on a screen with more items than a script may hold at
+-- once, the root the walk starts from is the first handle dropped.
 -- ---------------------------------------------------------------------------
 
-local function isGenerating(root, kind)
-  if kind == CHATGPT then
-    return hasDesc(root, 'Stop') or hasText(root, 'Thinking')
-  end
+local function isGenerating(kind)
   if kind == CLAUDE then
-    return hasDesc(root, 'Stop responding')
-      or hasDesc(root, 'Claude is thinking')
-      or hasText(root, 'Sending…')
+    return found({ contentDescription = 'Stop responding' })
+      or found({ contentDescription = 'Claude is thinking' })
+      or found({ text = 'Sending…' })
   end
-  return #find({ id = 'assistant_robin_stop_icon_button_compose' }, 1) > 0
-    or hasDesc(root, 'Stop generating response')
+  return found({ id = 'assistant_robin_stop_icon_button_compose' })
+    or found({ contentDescription = 'Stop generating response' })
 end
 
 -- ---------------------------------------------------------------------------
@@ -314,232 +297,6 @@ local function geminiResponse()
   end
   local parts = {}
   appendGemini(message, parts)
-  return clean(table.concat(parts, string.char(10)))
-end
-
--- ChatGPT --------------------------------------------------------------------
-
-local function chatGptCode(item)
-  local control = item:find({ contentDescription = 'Copy code' })
-  if control == nil then
-    return nil
-  end
-  local header = control
-  while header and #leafTexts(header, {}) == 0 do
-    header = header:parent()
-  end
-  if header == nil then
-    return nil
-  end
-  local container = header:parent()
-  if container == nil or not sameItem(container, item) then
-    return nil
-  end
-  local code = {}
-  local seen = {}
-  for _, kid in ipairs(kidsOf(container)) do
-    if kid and not sameItem(kid, header) then
-      for _, leaf in ipairs(leafItems(kid, {})) do
-        local text = clean(leaf.text)
-        local key = nodeKey(leaf)
-        if text ~= '' and (key == nil or not seen[key]) then
-          if key then
-            seen[key] = true
-          end
-          code[#code + 1] = text
-        end
-      end
-    end
-  end
-  if #code == 0 then
-    return nil
-  end
-  return table.concat(code, '\n')
-end
-
-local function isSuggestion(textItem, boundary)
-  local item = textItem:parent()
-  while item and not sameItem(item, boundary) do
-    if item.clickable then
-      local parent = item:parent()
-      return parent ~= nil and #leafTexts(parent, {}) > 1
-    end
-    item = item:parent()
-  end
-  return false
-end
-
-local function appendChatGpt(item, boundary, parts, seen)
-  seen = seen or {}
-  local code = chatGptCode(item)
-  if code ~= nil then
-    parts[#parts + 1] = codeBlock(code)
-    return
-  end
-  local kids = kidsOf(item)
-  if #kids == 0 then
-    if isSuggestion(item, boundary) then
-      return
-    end
-    local text = clean(item.text)
-    local key = nodeKey(item)
-    if text ~= '' and (key == nil or not seen[key]) then
-      if key then
-        seen[key] = true
-      end
-      parts[#parts + 1] = text
-    end
-    return
-  end
-  for _, kid in ipairs(kids) do
-    appendChatGpt(kid, boundary, parts, seen)
-  end
-end
-
--- The row of one reply: the nearest ancestor that holds just this reply's
--- Read aloud control and some text of its own. Without this, opening the
--- keyboard can make every reply share one container, and the whole
--- conversation gets read as one answer.
-local function textOutsideAnchor(item)
-  local parts = {}
-  for _, kid in ipairs(kidsOf(item)) do
-    if not hasDesc(kid, 'Read aloud') then
-      for _, text in ipairs(leafTexts(kid, {})) do
-        parts[#parts + 1] = text
-      end
-    end
-  end
-  return parts
-end
-
-local function anchorCount(item)
-  local count = 0
-  if descOf(item) == 'Read aloud' then
-    count = count + 1
-  end
-  for _, kid in ipairs(kidsOf(item)) do
-    count = count + anchorCount(kid)
-  end
-  return count
-end
-
--- The reply lowest on the screen, which is the newest one, whatever order the
--- app lists its items in.
-local function newestAnchor(anchors)
-  local best = anchors[1]
-  for _, anchor in ipairs(anchors) do
-    local a, b = anchor.bounds, best.bounds
-    if a and b and a.top > b.top then
-      best = anchor
-    end
-  end
-  return best
-end
-
--- Some ChatGPT conversations expose no Read aloud controls at all, only plain
--- text. Then the reply is what sits below the last message the user sent, which
--- is the bubble whose row is clickable and indented from the left.
-local function collectFlat(node, width, container, out)
-  local current = container
-  local b = node.bounds
-  if node.clickable and node.longClickable and b and b.left > width * 0.3 then
-    current = b
-  end
-  local kids = kidsOf(node)
-  if #kids == 0 then
-    local text = clean(node.text)
-    if text ~= '' and b then
-      out[#out + 1] = {
-        text = text,
-        top = b.top,
-        container = current,
-        editable = node.editable,
-        key = nodeKey(node),
-      }
-    end
-    return
-  end
-  for _, kid in ipairs(kids) do
-    collectFlat(kid, width, current, out)
-  end
-end
-
-local function flatChatGptResponse(root)
-  if root == nil then
-    return nil
-  end
-  local rb = root.bounds
-  local width = rb and (rb.right - rb.left) or 1080
-  local nodes = {}
-  collectFlat(root, width, nil, nodes)
-  local lastUser, lastTop = nil, -1
-  for _, node in ipairs(nodes) do
-    if node.container and node.container.top > lastTop then
-      lastTop = node.container.top
-      lastUser = node.container
-    end
-  end
-  if lastUser == nil then
-    return nil
-  end
-  local parts = {}
-  local seen = {}
-  for _, node in ipairs(nodes) do
-    local text = node.text
-    local key = node.key
-    if node.top > lastUser.bottom
-      and not node.editable
-      and text ~= 'Ask ChatGPT'
-      and text ~= 'Reply to ChatGPT'
-      and text ~= 'Message ChatGPT'
-      and (key == nil or not seen[key]) then
-      if key then
-        seen[key] = true
-      end
-      parts[#parts + 1] = text
-    end
-  end
-  if #parts == 0 then
-    return nil
-  end
-  return clean(table.concat(parts, string.char(10)))
-end
-
-local function chatGptResponse(root)
-  local anchors = find({ contentDescription = 'Read aloud' }, 200)
-  if #anchors == 0 then
-    return flatChatGptResponse(root) or ''
-  end
-  local anchor = newestAnchor(anchors)
-  local row = anchor:parent()
-  while row do
-    if anchorCount(row) == 1 and #textOutsideAnchor(row) > 0 then
-      break
-    end
-    row = row:parent()
-  end
-  if row == nil then
-    return ''
-  end
-
-  local parts = {}
-  for _, kid in ipairs(kidsOf(row)) do
-    if not hasDesc(kid, 'Read aloud') then
-      appendChatGpt(kid, row, parts)
-    end
-  end
-
-  -- A writing card puts a short card title before the answer. It is the topic,
-  -- not the answer. Waypoint dropped any short first part; a line that leads
-  -- into a code block, such as "Run this:", reads the same way, so it is kept.
-  if #parts >= 2
-    and parts[1] ~= CODE_START
-    and parts[2] ~= CODE_START
-    and not endsWith(parts[1], ':')
-    and #parts[1] <= 80
-    and #parts[2] > #parts[1] * 2 then
-    table.remove(parts, 1)
-  end
   return clean(table.concat(parts, string.char(10)))
 end
 
@@ -650,10 +407,7 @@ end
 -- Reading a reply out.
 -- ---------------------------------------------------------------------------
 
-local function latestResponse(root, kind)
-  if kind == CHATGPT then
-    return chatGptResponse(root)
-  end
+local function latestResponse(kind)
   if kind == CLAUDE then
     return claudeResponse()
   end
@@ -672,7 +426,7 @@ codeBlock = function(code)
   if setting('code', true) == false then
     return code
   end
-  return CODE_START .. '\n' .. code .. '\n' .. CODE_END
+  return tr(CODE_START) .. '\n' .. code .. '\n' .. tr(CODE_END)
 end
 
 local function quietSeconds()
@@ -697,7 +451,7 @@ local function speakGenerating()
   end
   local packageName = currentPackage()
   print('Generating in ' .. (NAMES[packageName] or tostring(packageName)))
-  say('Generating', false)
+  say(tr('Generating'), false)
 end
 
 -- Read the newest reply, if it is new and the app has stopped writing.
@@ -707,17 +461,7 @@ finish = function()
   if not APPS[packageName] then
     return
   end
-  local ok, root = pcall(function()
-    return sf.screen.root()
-  end)
-  if not ok then
-    noteError(root)
-    return
-  end
-  if root == nil then
-    return
-  end
-  if isGenerating(root, packageName) then
+  if isGenerating(packageName) then
     if retries < MAX_RETRIES then
       retries = retries + 1
       quiet = sf.setTimeout(finish, RETRY_MS)
@@ -728,7 +472,7 @@ finish = function()
   end
   -- Take the reply as it is now. The text cached by the poll that scheduled
   -- this may be a fragment from before the app finished writing.
-  local text = latestResponse(root, packageName)
+  local text = latestResponse(packageName)
   if text == '' then
     pendingText = ''
     print('The reply disappeared before it could be read')
@@ -752,7 +496,7 @@ finish = function()
     print('That reply was already read')
     return
   end
-  print('Reading a reply of ' .. #pendingText .. ' characters:\n' .. pendingText)
+  print('Reading a reply of ' .. #pendingText .. ' characters')
   spokenText = pendingText
   spokenGeneration = pendingGeneration
   say(pendingText, setting('interrupt', false) == true)
@@ -770,18 +514,8 @@ check = function()
   if not APPS[packageName] then
     return
   end
-  local ok, root = pcall(function()
-    return sf.screen.root()
-  end)
-  if not ok then
-    noteError(root)
-    return
-  end
-  if root == nil then
-    return
-  end
 
-  local writing = isGenerating(root, packageName)
+  local writing = isGenerating(packageName)
   if writing and not generating then
     generation = generation + 1
     if pendingText == spokenText then
@@ -797,7 +531,7 @@ check = function()
   end
   generating = writing
 
-  local text = latestResponse(root, packageName)
+  local text = latestResponse(packageName)
 
   if not baselined then
     -- Whatever reply is already on screen was read last session, or was never
@@ -926,8 +660,8 @@ sf.onAppEnter(function(app)
   -- A script with apps loads when one of them comes to the front.
   reset()
   print('Looking at ' .. tostring(app.package))
-  -- Some apps, ChatGPT among them, send one content change and then nothing
-  -- while a reply streams, so a poll is the only way to see it finish.
+  -- Some apps send one content change and then nothing while a reply
+  -- streams, so a poll is the only way to see it finish.
   poll = sf.setInterval(check, POLL_MS)
   schedule()
 end)
