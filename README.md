@@ -7,6 +7,7 @@ Lua scripts for the [SandFly](https://github.com/aaron-gh/SandFly) screen reader
 | `dialect-keypad.lua` | Dialect | Keys activate when the finger lifts, and long-press after a hold time. | Aaron Hewitt |
 | `google-messages-actions.lua` | Google Messages | Pin, Mark as unread, Archive, Delete, Snooze, Block and Add contact are in each conversation's Actions menu. | Surendra |
 | `keyboard-voice-gesture.lua` | All apps | While the keyboard is open, a two-finger double tap presses the keyboard's voice typing key. | Surendra |
+| `openbubbles-messages.lua` | OpenBubbles | Each message in a chat is one item: sender, content, link preview, the message it replies to and its reply count. Dates are separate items and contact initials are left out. Mark Unread, Pin, Mute and Delete are in each conversation's Actions menu. | Aaron Hewitt |
 | `whatsapp-messages.lua` | WhatsApp | Each message in a chat is one item: sender, content, the message it replies to, and time. Its buttons are in its Actions menu. | Aaron Hewitt |
 | `youtube-actions.lua` | YouTube | Swiping skips the items in each video, mix, playlist, comment and reply. They are in its Actions menu. The keyboard shortcuts of YouTube on the desktop control the player. | Aaron Hewitt |
 
