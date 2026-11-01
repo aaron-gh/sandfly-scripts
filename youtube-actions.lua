@@ -6,8 +6,8 @@
 local manifest = {
   id = 'youtube-actions',
   name = 'YouTube video actions',
-  version = '1.7.0-lua',
-  author = 'Surendra',
+  version = '1.8.0-lua',
+  author = 'Aaron Hewitt',
   minApiVersion = 2,
   testedApiVersion = 2,
   description = 'Skips the items inside each video, mix, playlist, comment and reply in YouTube lists, and puts them in its Actions menu instead. The keyboard shortcuts of YouTube on the desktop control the player: K, J, L, M, F, C, I, Shift+N, Shift+P and 0 to 9; and, with the player focused, Space, the arrow keys, Home and End.',
@@ -46,6 +46,13 @@ local manifest = {
     -- The rows themselves are not inside a clickable item, so they stay.
     { match = { clickable = true, inside = { { clickable = true }, { id = 'results' } } }, hide = true },
     { match = { clickable = true, inside = { { clickable = true }, { id = 'section_list' } } }, hide = true },
+    -- On phones, the items of a video, mix or Short sit side by side in a row that can't be clicked.
+    -- The row is read as one item, and a double-tap presses its first clickable item, which opens
+    -- the video. In a row with a heading, such as a shelf's title, a double-tap presses nothing.
+    { match = { focusable = true, clickable = false, scrollable = false, inside = { id = 'results' }, has = { heading = true } }, group = true, activate = { heading = true } },
+    { match = { focusable = true, clickable = false, scrollable = false, inside = { id = 'section_list' }, has = { heading = true } }, group = true, activate = { heading = true } },
+    { match = { focusable = true, clickable = false, scrollable = false, inside = { id = 'results' }, has = { clickable = true } }, group = true, activate = { clickable = true } },
+    { match = { focusable = true, clickable = false, scrollable = false, inside = { id = 'section_list' }, has = { clickable = true } }, group = true, activate = { clickable = true } },
     { id = 'contextual_menu_anchor', hide = true },
   },
 }
@@ -56,6 +63,7 @@ local manifest = {
 -- The lists whose rows hold other items: feeds, search results, comments and replies.
 local LISTS = { results = true, section_list = true }
 local MAX_ROW_ACTIONS = 30
+local MAX_ROW_ITEMS = 100
 
 local function shortId(item)
   return string.match(item.id or '', '[^/]*$')
@@ -86,9 +94,26 @@ local function label(item)
   return clean(item.text)
 end
 
--- A row is a clickable item in one of the lists, and not inside another clickable item.
+local function inList(item)
+  local node = item:parent()
+  for _ = 1, 30 do
+    if not node then return false end
+    if LISTS[shortId(node)] then return true end
+    node = node:parent()
+  end
+  return false
+end
+
+-- A row that the rules read as one item: one that can't be clicked, with clickable items in it.
+local function isSideBySideRow(item)
+  return not item.clickable and item.focusable and not item.scrollable and inList(item)
+    and item:find({ clickable = true }) ~= nil
+end
+
+-- A row is a clickable item in one of the lists, and not inside another clickable item, or a row
+-- read as one item.
 local function isRow(item)
-  if not item.clickable then return false end
+  if not item.clickable then return isSideBySideRow(item) end
   local node = item:parent()
   for _ = 1, 30 do
     if not node then return false end
@@ -99,12 +124,25 @@ local function isRow(item)
   return false
 end
 
--- The clickable items inside a row. Items in a group of their own, such as Like, Dislike and Reply
--- of a comment, come first. A group without a name of its own is left out.
+-- The item a double-tap presses in a row read as one item, as the rules set it: none in a row with
+-- a heading, and otherwise its first clickable item. items is everything in the row, row first.
+local function pressedItem(items)
+  local first
+  for i = 2, #items do
+    if items[i].heading then return nil end
+    if not first and items[i].clickable then first = items[i] end
+  end
+  return first
+end
+
+-- The clickable items inside a row, other than the one a double-tap presses. Items in a group of
+-- their own, such as Like, Dislike and Reply of a comment, come first. A group without a name of
+-- its own is left out.
 local function rowActions(row)
+  local pressed = not row.clickable and pressedItem(row:findAll({}, MAX_ROW_ITEMS)) or nil
   local grouped, others, seen = {}, {}, {}
   for _, inner in ipairs(row:findAll({ clickable = true }, MAX_ROW_ACTIONS)) do
-    local title = inner ~= row and label(inner) or ''
+    local title = (inner ~= row and inner ~= pressed) and label(inner) or ''
     if title ~= '' and not seen[title] then
       seen[title] = true
       local parent = inner:parent()
@@ -117,6 +155,52 @@ local function rowActions(row)
   end
   return grouped
 end
+
+-- What a row read as one item says: the name of the item a double-tap presses, and the text in the
+-- row that can't be clicked. Text already said, such as the channel in a video's name, is left out.
+local function rowText(row)
+  local items = row:findAll({}, MAX_ROW_ITEMS)
+  local pressed = pressedItem(items)
+  local parts = {}
+  for i = 2, #items do
+    local inner = items[i]
+    local text = (inner == pressed or not inner.clickable) and label(inner) or ''
+    local said = text == ''
+    for _, part in ipairs(parts) do
+      if string.find(part, text, 1, true) then
+        said = true
+        break
+      end
+    end
+    if not said then parts[#parts + 1] = text end
+  end
+  return table.concat(parts, ', ')
+end
+
+-- Each focus is counted, so that a row read after focus moved on isn't said.
+local focusCount = 0
+
+-- Reads the focused row and says it, or what SandFly would have said, fallback, if it isn't a row.
+local function sayRow(item, fallback, count)
+  local text = isSideBySideRow(item) and rowText(item) or ''
+  if text == '' then text = fallback or '' end
+  if count == focusCount and text ~= '' then
+    sf.speak(text, { interrupt = true })
+  end
+end
+
+-- Finding the row's items asks YouTube for each of them, which takes longer than the 30
+-- milliseconds SandFly waits for onFocus, so the row is read after onFocus returns. Only fields of
+-- the item itself are looked at here, which need no call to YouTube.
+sf.onFocus(function(item, text)
+  focusCount = focusCount + 1
+  if item.clickable or not item.focusable or item.scrollable or (item.childCount or 0) == 0
+      or label(item) ~= '' then
+    return
+  end
+  sf.setTimeout(sayRow, 0, item, text, focusCount)
+  return false
+end)
 
 sf.onActions(function(item)
   if shortId(item) == 'video_info_view' then
@@ -341,4 +425,4 @@ onKey('finish', goToEnd, FOCUSED)
 for tenths = 0, 9 do
   onKey('seek' .. tenths, function() seekTo(tenths) end)
 end
--- SandFly signature: MEQCIF5YTu1Vdt7ST+kBtLWvz7NQ1ynsIOQ/Eok1nhsG4NtDAiBbcGXJ296GJBY3U5ZNMG/wqyQf6GVVJqd6GJS/Uhc6lg==
+-- SandFly signature: MEYCIQDgKhGH51nrvh1h0sEPmwD76rlg36o3vrGsEPIBpO71wQIhALhSY583CwoQbkQUx/C5Mkl99ybPB7kqzES11hRLOCqO
