@@ -1,7 +1,7 @@
 local manifest = {
   id = 'whatsapp-messages',
   name = 'WhatsApp messages',
-  version = '3.4',
+  version = '3.5',
   author = 'Aaron Hewitt',
   minApiVersion = 1,
   testedApiVersion = 1,
@@ -14,6 +14,13 @@ local manifest = {
   settings = { { key = 'expandLong', type = 'switch', title = 'Expand long messages', default = true } },
   rules = {
     { match = { parentId = 'list', className = 'ViewGroup' }, group = true },
+    -- A voice message, audio file, or other media still downloading has a play/pause or download
+    -- button, control_btn. Without this, a double-tap on the row falls to WhatsApp's own merged
+    -- accessibility node, which doesn't reliably press it.
+    {
+      match = { parentId = 'list', className = 'ViewGroup', has = { id = 'control_btn' } },
+      activate = { id = 'control_btn' },
+    },
     {
       match = { clickable = true, inside = { parentId = 'list', className = 'ViewGroup' } },
       hide = 'all',
