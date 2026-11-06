@@ -1,0 +1,5 @@
+local file = assert(io.open('main.lua', 'r'))
+script_source = file:read('*a')
+file:close()
+local count = dofile('tests/check.lua')
+print(string.format('Passed %d regression scenarios in %s.', count, _VERSION))
