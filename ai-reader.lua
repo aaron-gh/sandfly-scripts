@@ -12,13 +12,15 @@
 local manifest = {
   id = 'ai-reader',
   name = 'AI reader',
-  version = '1.13',
+  version = '1.14',
   author = 'Devin Prater',
   minApiVersion = 1,
   testedApiVersion = 1,
   description = 'Says a reply when an AI app finishes writing it, including any code blocks. A port of Waypoint.',
   apps = {
-    'com.google.android.googlequicksearchbox',
+    -- Gemini is one screen of the Google app; the package alone would also
+    -- load the script in Search, Discover and Lens.
+    { package = 'com.google.android.googlequicksearchbox', activity = 'robin.main.MainActivity' },
     'com.anthropic.claude',
   },
   permissions = { 'screen', 'speech' },
@@ -69,6 +71,7 @@ local MAX_RETRIES = 15 -- Give up on one stream after this many pauses.
 local MAX_ERRORS_LOGGED = 3
 local BASELINE_MS = 1500 -- How long the reply on screen counts as already read.
 
+local lastPackage = nil -- The package check() last ran in.
 local pendingText = '' -- The newest reply we have seen on screen.
 local spokenText = '' -- The last reply we read out.
 local generation = 0 -- Counts each time an app starts writing a new reply.
@@ -306,7 +309,8 @@ local function isClaudeCode(item)
   local header = false
   local code = false
   for _, kid in ipairs(kidsOf(item)) do
-    if hasDesc(kid, 'Copy code') and hasDesc(kid, 'Expand code') then
+    if kid:find({ contentDescription = 'Copy code' }) ~= nil
+      and kid:find({ contentDescription = 'Expand code' }) ~= nil then
       header = true
     elseif #leafTexts(kid, {}) > 0 then
       code = true
@@ -374,7 +378,7 @@ local function claudeResponse()
     local kids = kidsOf(message)
     for index = #kids, 2, -1 do
       local actions = kids[index]
-      if actions and hasDesc(actions, 'Copy message') then
+      if actions and actions:find({ contentDescription = 'Copy message' }) ~= nil then
         -- Claude puts the prompt and the answer in the same item, ahead of the
         -- actions. The prompt is long-clickable and holds text, so the answer
         -- starts after the last of those.
@@ -514,6 +518,17 @@ check = function()
   if not APPS[packageName] then
     return
   end
+  if lastPackage ~= nil and packageName ~= lastPackage then
+    -- The app in front is another app this script reads, such as Claude
+    -- beside Gemini in split screen. SandFly calls neither onAppEnter nor
+    -- onAppLeave when the front app changes between two apps in `apps`, so
+    -- the state still belongs to the other app, and its pending reply would
+    -- be taken as this app's and read. Start over in this app instead.
+    lastPackage = packageName
+    reset()
+    return
+  end
+  lastPackage = packageName
 
   local writing = isGenerating(packageName)
   if writing and not generating then
@@ -659,7 +674,8 @@ end)
 sf.onAppEnter(function(app)
   -- A script with apps loads when one of them comes to the front.
   reset()
-  print('Looking at ' .. tostring(app.package))
+  lastPackage = app.package
+  print('Looking at ' .. tostring(app.package) .. ', activity ' .. tostring(app.activity))
   -- Some apps send one content change and then nothing while a reply
   -- streams, so a poll is the only way to see it finish.
   poll = sf.setInterval(check, POLL_MS)
