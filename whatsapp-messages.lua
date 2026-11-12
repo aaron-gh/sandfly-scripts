@@ -13,14 +13,9 @@ local manifest = {
   permissions = { 'screen', 'actions', 'speech', 'input' },
   settings = { { key = 'expandLong', type = 'switch', title = 'Expand long messages', default = true } },
   rules = {
-    { match = { parentId = 'list', className = 'ViewGroup' }, group = true },
-    -- A voice message, audio file, or other media still downloading has a play/pause or download
-    -- button, control_btn. Without this, a double-tap on the row falls to WhatsApp's own merged
-    -- accessibility node, which doesn't reliably press it.
-    {
-      match = { parentId = 'list', className = 'ViewGroup', has = { id = 'control_btn' } },
-      activate = { id = 'control_btn' },
-    },
+    -- A voice message, audio file, or media not yet downloaded has a play/pause or download button,
+    -- control_btn. A double-tap presses it; rows without one fall back to their usual target.
+    { match = { parentId = 'list', className = 'ViewGroup' }, group = true, activate = { id = 'control_btn' } },
     {
       match = { clickable = true, inside = { parentId = 'list', className = 'ViewGroup' } },
       hide = 'all',
