@@ -1,7 +1,7 @@
 local manifest = {
   id = 'whatsapp-messages',
   name = 'WhatsApp messages',
-  version = '3.4',
+  version = '3.5',
   author = 'Aaron Hewitt',
   minApiVersion = 1,
   testedApiVersion = 1,
@@ -13,7 +13,9 @@ local manifest = {
   permissions = { 'screen', 'actions', 'speech', 'input' },
   settings = { { key = 'expandLong', type = 'switch', title = 'Expand long messages', default = true } },
   rules = {
-    { match = { parentId = 'list', className = 'ViewGroup' }, group = true },
+    -- A voice message, audio file, or media not yet downloaded has a play/pause or download button,
+    -- control_btn. A double-tap presses it; rows without one fall back to their usual target.
+    { match = { parentId = 'list', className = 'ViewGroup' }, group = true, activate = { id = 'control_btn' } },
     {
       match = { clickable = true, inside = { parentId = 'list', className = 'ViewGroup' } },
       hide = 'all',
