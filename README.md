@@ -4,6 +4,7 @@ Lua scripts for the [SandFly](https://github.com/aaron-gh/SandFly) screen reader
 
 | Script | App | Does | Author |
 |---|---|---|---|
+| `ai-reader.lua` | Gemini, Claude | Reads a reply once the app has finished writing it, including any code blocks. A port of Waypoint. | Devin Prater |
 | `dialect-keypad.lua` | Dialect | Keys activate when the finger lifts, and long-press after a hold time. | Aaron Hewitt |
 | `google-messages-actions.lua` | Google Messages | Pin, Mark as unread, Archive, Delete, Snooze, Block and Add contact are in each conversation's Actions menu. | Surendra |
 | `keyboard-voice-gesture.lua` | All apps | While the keyboard is open, a two-finger double tap presses the keyboard's voice typing key. | Surendra |
