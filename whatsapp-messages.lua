@@ -1,10 +1,10 @@
 local manifest = {
   id = 'whatsapp-messages',
   name = 'WhatsApp messages',
-  version = '3.4',
+  version = '3.5',
   author = 'Aaron Hewitt',
-  minApiVersion = 1,
-  testedApiVersion = 1,
+  minApiVersion = 2,
+  testedApiVersion = 2,
   description = 'Reads each message in a WhatsApp chat as one item: sender, content, the message it replies to, and time. Play, playback speed and the other buttons in a message are in its Actions menu.',
   apps = {
     { package = 'com.whatsapp', activity = 'Conversation' },
@@ -14,6 +14,8 @@ local manifest = {
   settings = { { key = 'expandLong', type = 'switch', title = 'Expand long messages', default = true } },
   rules = {
     { match = { parentId = 'list', className = 'ViewGroup' }, group = true },
+    -- A double tap on a photo message opens the photo, not the row.
+    { id = 'conversation_row_image', activate = { id = 'image' } },
     {
       match = { clickable = true, inside = { parentId = 'list', className = 'ViewGroup' } },
       hide = 'all',
@@ -504,7 +506,8 @@ local SKIPPED_BUTTONS = {
   info = true,
 }
 
-local function title_of(button)
+-- downloading is true while the row has a Download button, so its photo isn't there yet.
+local function title_of(button, downloading)
   local id = short_id(button)
   if id == 'bubble_quoted_message_frame' then
     return tr('Go to replied message')
@@ -514,7 +517,9 @@ local function title_of(button)
     return tr('Open link')
   elseif id == 'poll_option_main_layout' then
     return tr('Vote') .. ': ' .. label_of(button)
-  elseif id == 'polls_main_layout' or id == 'image' then
+  elseif id == 'image' then
+    return downloading and '' or tr('Open photo')
+  elseif id == 'polls_main_layout' then
     local label = label_of(button)
     return label:lower() == 'enlarge photo' and label or ''
   elseif id == 'control_btn' then
@@ -531,15 +536,29 @@ sf.onActions(function(item)
     return
   end
   local actions, titles = {}, {}
-  for _, button in ipairs(item:findAll({ clickable = true }, MAX_BUTTONS)) do
+  local buttons = item:findAll({ clickable = true }, MAX_BUTTONS)
+  local downloading = false
+  for _, button in ipairs(buttons) do
+    if short_id(button) == 'control_btn' and (button.className or ''):sub(-11) ~= 'ImageButton' then
+      downloading = true
+    end
+  end
+  for _, button in ipairs(buttons) do
     if button ~= item and not button:find('group_profile_initials') and not button:find('group_profile_pic') then
-      local title = title_of(button)
+      local title = title_of(button, downloading)
       if title ~= '' and not titles[title] then
         titles[title] = true
-        actions[#actions + 1] = { title = title, run = function() button:click() end }
+        actions[#actions + 1] = {
+          title = title,
+          run = function()
+            if not button:click() then
+              button:tap()
+            end
+          end,
+        }
       end
     end
   end
   return actions
 end)
--- SandFly signature: MEQCICaTiN1Cw99uKxqcNUQD/682sDTsIxi7cF56q7FyVGAIAiAChEpdRNN+nLb+JBTb02rG0BCuoVw+Wa5i2+yorrx1MQ==
+-- SandFly signature: MEUCID+bxKyaMmPfIbS/27gywA5UsOqc/dYvMcZtD7CBwyesAiEA0aq8aYqvaAyqYZI98Okfx6OMUZFCsxIwNABKsj70nxI=
