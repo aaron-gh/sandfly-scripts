@@ -1,32 +1,44 @@
 local manifest = {
   id = 'whatsapp-messages',
   name = 'WhatsApp messages',
-  version = '3.5',
+  version = '3.6',
   author = 'Aaron Hewitt',
   minApiVersion = 2,
   testedApiVersion = 2,
-  description = 'Reads each message in a WhatsApp chat as one item: sender, content, the message it replies to, and time. Play, playback speed and the other buttons in a message are in its Actions menu.',
+  description = 'Reads each message in a WhatsApp chat as one item: sender, content, the message it replies to, and time. Play, playback speed and the other buttons in a message are in its Actions menu. In the chats list, swiping skips each chat\'s photo, which opens the profile from the chat\'s Actions menu.',
   apps = {
     { package = 'com.whatsapp', activity = 'Conversation' },
+    { package = 'com.whatsapp', activity = 'HomeActivity' },
     { package = 'com.whatsapp.w4b', activity = 'Conversation' },
+    { package = 'com.whatsapp.w4b', activity = 'HomeActivity' },
   },
   permissions = { 'screen', 'actions', 'speech', 'input' },
   settings = { { key = 'expandLong', type = 'switch', title = 'Expand long messages', default = true } },
   rules = {
-    { match = { parentId = 'list', className = 'ViewGroup' }, group = true },
+    { match = { parentId = 'list', className = 'ViewGroup' }, group = true, activity = 'Conversation' },
     -- A double tap on a photo message opens the photo, not the row.
-    { id = 'conversation_row_image', activate = { id = 'image' } },
+    { id = 'conversation_row_image', activate = { id = 'image' }, activity = 'Conversation' },
     {
       match = { clickable = true, inside = { parentId = 'list', className = 'ViewGroup' } },
       hide = 'all',
+      activity = 'Conversation',
     },
     {
       match = { className = 'SeekBar', inside = { parentId = 'list', className = 'ViewGroup' } },
       hide = true,
       silence = true,
+      activity = 'Conversation',
     },
     -- A voice message's time, which counts up each second while it plays.
-    { match = { id = 'description', inside = { parentId = 'list', className = 'ViewGroup' } }, silence = true },
+    {
+      match = { id = 'description', inside = { parentId = 'list', className = 'ViewGroup' } },
+      silence = true,
+      activity = 'Conversation',
+    },
+    -- The photo of each chat in the chats list and the Communities tab. It is in the chat's
+    -- Actions menu instead.
+    { match = { id = 'contact_selector', parentId = 'contact_row_container' }, hide = 'all', activity = 'HomeActivity' },
+    { match = { id = 'contact_photo', parentId = 'contact_row_container' }, hide = true, activity = 'HomeActivity' },
   },
 }
 
@@ -531,7 +543,55 @@ local function title_of(button, downloading)
   return label:find('^https?://') and tr('Open link') or label
 end
 
+-- The label of an item's click action, where the app gave it one, such as "view profile".
+local ACTION_CLICK = 16
+local function click_label(item)
+  for _, action in ipairs(item.actions or {}) do
+    if action.id == ACTION_CLICK and action.label ~= 'click' then
+      return (clean(action.label):gsub('^%l', string.upper))
+    end
+  end
+  return ''
+end
+
+local MAX_CHAT_ITEMS = 20
+
+-- A chat in the chats list, whose photo, hidden by the rules, opens the contact's or group's
+-- profile. The action has the name WhatsApp gives the photo, in WhatsApp's language. A community's
+-- photo can't be clicked itself; the frame around it can.
+local function chat_actions(row)
+  local photo, frame
+  for _, item in ipairs(row:findAll({}, MAX_CHAT_ITEMS)) do
+    local id = short_id(item)
+    if id == 'contact_photo' or id == 'parent_stack_photo' then
+      photo = photo or item
+    elseif id == 'contact_selector' then
+      frame = frame or item
+    end
+  end
+  local target = photo and photo.clickable and photo or frame
+  if not target then
+    return
+  end
+  local title = present(click_label(target))
+    or (photo and (present(click_label(photo)) or present(clean(photo.contentDescription))))
+    or tr('View profile')
+  return {
+    {
+      title = title,
+      run = function()
+        if not target:click() then
+          target:tap()
+        end
+      end,
+    },
+  }
+end
+
 sf.onActions(function(item)
+  if short_id(item) == 'contact_row_container' then
+    return chat_actions(item)
+  end
   if not list_of(item) then
     return
   end
@@ -561,4 +621,4 @@ sf.onActions(function(item)
   end
   return actions
 end)
--- SandFly signature: MEUCID+bxKyaMmPfIbS/27gywA5UsOqc/dYvMcZtD7CBwyesAiEA0aq8aYqvaAyqYZI98Okfx6OMUZFCsxIwNABKsj70nxI=
+-- SandFly signature: MEUCIQDp4W+IKoalTRDc/JLSlwzSxhZX2hdNd6Xk+mcgWNgj5QIgT6/KF4gAhJjfUnfVkB9mQzf7CrBpeC/gamvnyucAMdI=
